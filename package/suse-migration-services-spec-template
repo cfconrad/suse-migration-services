@@ -124,6 +124,9 @@ The migrate tool to start the migration as container based process
 install -D -m 755 tools/run_migration \
     %{buildroot}%{_sbindir}/run_migration
 
+install -D -m 755 tools/wicked2nm_pre_lib.sh \
+    %{buildroot}%{_datarootdir}/%{name}/wicked2nm_pre_lib.sh
+
 install -D -m 644 systemd/suse-migration-mount-system.service \
     %{buildroot}%{_unitdir}/suse-migration-mount-system.service
 
@@ -292,6 +295,9 @@ install -D -m 755 tools/migrate \
 %{_unitdir}/suse-migration-reboot.service
 %{_unitdir}/suse-migration-wicked-networkmanager.service
 %{_unitdir}/suse-migration-ha.service
+
+%dir %{_datarootdir}/%{name}
+%{_datarootdir}/%{name}/wicked2nm_pre_lib.sh
 
 %files -n %{pythonpkgname}
 %{python_sitelib}/suse_migration_services
