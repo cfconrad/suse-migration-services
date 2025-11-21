@@ -15,6 +15,74 @@
 # You should have received a copy of the GNU General Public License
 # along with suse-migration-services. If not, see <http://www.gnu.org/licenses/>
 
+
+function create_systemd_linkfile()
+{
+    local dev
+    dev="$1"
+
+    link_file=/etc/systemd/network/70-persistent-net-"${dev}".link
+    test -e "${link_file}" && return
+
+    ID_PATH=$(
+        udevadm info -q property --property=ID_PATH \
+            /sys/class/net/"${dev}"
+        )
+    ID_PATH=${ID_PATH#ID_PATH=}
+    ID_NET_DRIVER=$(
+        udevadm info -q property --property=ID_NET_DRIVER \
+            /sys/class/net/"${dev}"
+        )
+    ID_NET_DRIVER=${ID_NET_DRIVER#ID_NET_DRIVER=}
+    if [ -z "$ID_PATH" ] || [ -z "$ID_NET_DRIVER" ]; then
+        echo "[ERROR] failed to create systemd.link file for ${dev}"
+        exit 1
+    fi
+
+    grep -sE '^Name="?'"$dev"'"?$' \
+        /etc/systemd/network/*.link && continue
+    grep -sE '^\s*[^#].*[ \t,]NAME="'"$dev"'"$' \
+        /etc/udev/rules.d/*.rules && continue
+
+    echo "Create $link_file with Path=$ID_PATH Driver=$ID_NET_DRIVER"
+    cat > "${link_file}" <<EOT
+# This file was created from run_migration
+[Match]
+Path=$ID_PATH
+Driver=$ID_NET_DRIVER
+
+[Link]
+NamePolicy=
+Name=$dev
+EOT
+}
+
+
+function biosdevname_enabled() 
+{
+    enabled=false
+    if [ -e /sys/class/dmi/id/sys_vendor ]; then
+        if cat /sys/class/dmi/id/sys_vendor | grep -q ^Dell; then
+            enabled=true
+        fi
+    fi
+
+    if cat /proc/cmdline | grep -wq "biosdevname=1"; then
+        enabled=true
+    fi
+
+    if cat /proc/cmdline | grep -wq "biosdevname=0"; then
+        enabled=false
+    fi
+
+    if ! command -v biosdevname >/dev/null; then
+        enabled=false
+    fi
+
+    ${enabled}
+}
+
+
 function setup_wicked_to_NetworkManager_prereqs {
     # """
     # Set up required files for wicked to NetworkManager migration
@@ -27,43 +95,25 @@ function setup_wicked_to_NetworkManager_prereqs {
     fi
 
     # Create systemd.link file for VMWARE or Hyper-V virtual interfaces
+    # (bsc#1250076)
     for netdev in /sys/class/net/*; do
         dev=$(basename "${netdev}")
-        link_file=/etc/systemd/network/70-persistent-net-"${dev}".link
-        test -e "${link_file}" && continue
 
         ! grep -E '^(00:0c:29:|00:50:56:|00:15:5d:)' \
             /sys/class/net/"${dev}"/address >/dev/null && continue
-        ID_PATH=$(
-            udevadm info -q property --property=ID_PATH \
-            /sys/class/net/"${dev}"
-        )
-        ID_PATH=${ID_PATH#ID_PATH=}
-        ID_NET_DRIVER=$(
-            udevadm info -q property --property=ID_NET_DRIVER \
-            /sys/class/net/"${dev}"
-        )
-        ID_NET_DRIVER=${ID_NET_DRIVER#ID_NET_DRIVER=}
-        if [ -z "$ID_PATH" ] || [ -z "$ID_NET_DRIVER" ]; then
-            echo "[ERROR] failed to create systemd.link file for ${dev}"
-            exit 1
-        fi
-        grep -sE '^Name="?'"$dev"'"?$' \
-            /etc/systemd/network/*.link && continue
-        grep -sE '^\s*[^#].*[ \t,]NAME="'"$dev"'"$' \
-            /etc/udev/rules.d/*.rules && continue
 
-        echo "Create $link_file with Path=$ID_PATH Driver=$ID_NET_DRIVER"
-        cat > "${link_file}" <<EOT
-# This file was created from suse-migration-services
-[Match]
-Path=$ID_PATH
-Driver=$ID_NET_DRIVER
-
-[Link]
-NamePolicy=
-Name=$dev
-EOT
-
+        create_systemd_linkfile "$dev"
     done
+
+    # Creating systemd.link files for all interfaces, 
+    # renamed by biosdevname. (bsc#1253963)
+    if biosdevname_enabled; then
+        for netdev in /sys/class/net/*; do
+            dev=$(basename "${netdev}")
+            biosname=$(biosdevname --policy physical --smbios 2.6 --nopirq -i "$dev")
+            if [ "$dev" == "$biosname" ]; then
+                create_systemd_linkfile "$dev"
+            fi
+        done
+    fi
 }
